@@ -3,7 +3,7 @@ cached-property==1.5.1; python_version < '3.8'
 certifi==2021.5.30
 chardet==3.0.4
 colorama==0.4.4; sys_platform == 'win32'
-distro==1.5.0
+distro==1.6.0
 docker==5.0.0
 docker-pycreds==0.4.0
 dockerpty==0.4.1
