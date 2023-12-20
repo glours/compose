@@ -155,6 +155,22 @@ func (c *convergence) ensureService(ctx context.Context, project *types.Project,
 		}
 		if mustRecreate {
 			i, container := i, container
+			if x, ok := service.Extensions["x-hooks"]; ok {
+				var hooks ServiceHooks
+				err = loader.Transform(x, &hooks)
+				if err != nil {
+					return err
+				}
+				if hooks.PreCreate != nil {
+					eventName := fmt.Sprintf("%s-pre-create", getCanonicalContainerName(container))
+					out, err := c.service.runHook(ctx, project, service, hooks.PreCreate.ServiceConfig, getCanonicalContainerName(container), progress.ContextWriter(ctx), eventName)
+					if err != nil {
+						return err
+					}
+					out = strings.TrimSpace(out)
+					service.Environment[hooks.PreCreate.SetEnvironment] = &out
+				}
+			}
 			eg.Go(tracing.SpanWrapFuncForErrGroup(ctx, "container/recreate", tracing.ContainerOptions(container), func(ctx context.Context) error {
 				recreated, err := c.service.recreateContainer(ctx, project, service, container, inherit, timeout)
 				updated[i] = recreated
