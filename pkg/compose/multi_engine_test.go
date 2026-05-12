@@ -88,20 +88,21 @@ func projectWithXEngine(serviceName, engineName string) *types.Project {
 	}
 }
 
-// TestBuildEnginesMapDefaultIsAlwaysLocal verifies that the "default" engine in
-// the map always resolves to the local Docker socket, regardless of what the
-// active context's DaemonHost() would return. This guards against the bug where
-// "docker offload start" switches the active context to "offload" and causes all
-// non-annotated services to run on the offload engine instead of locally.
-func TestBuildEnginesMapDefaultIsAlwaysLocal(t *testing.T) {
-	// Ensure DOCKER_HOST is not set so we get the hard-coded default socket.
-	t.Setenv("DOCKER_HOST", "")
-
+// TestBuildEnginesMapDefaultIsCurrentContext verifies that the "default" engine
+// in the map is whatever the active Docker context's DaemonHost() returns.
+// Services without x-engine run on the currently active context, exactly like
+// regular compose up — no special-casing, no hardcoded socket paths.
+func TestBuildEnginesMapDefaultIsCurrentContext(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 
+	const currentContextEndpoint = "tcp://current-context:2375"
+
+	mockAPIClient := mocks.NewMockAPIClient(mockCtrl)
+	mockAPIClient.EXPECT().DaemonHost().Return(currentContextEndpoint).AnyTimes()
+
 	cli := mocks.NewMockCli(mockCtrl)
-	// The offload context returns the offload endpoint when its host is queried.
+	cli.EXPECT().Client().Return(mockAPIClient).AnyTimes()
 	cli.EXPECT().ContextStore().Return(&stubContextStore{
 		contextName: "offload",
 		host:        "tcp://offload-engine:2375",
@@ -109,39 +110,25 @@ func TestBuildEnginesMapDefaultIsAlwaysLocal(t *testing.T) {
 
 	engines := buildEnginesMap(projectWithXEngine("db", "offload"), cli)
 
-	// default must always be the local Unix socket, not the active context endpoint.
-	assert.Equal(t, "unix:///var/run/docker.sock", engines["default"])
+	// default must be whatever the active context's DaemonHost() returns.
+	assert.Equal(t, currentContextEndpoint, engines["default"])
 	// The offload context should be resolved from the context store.
 	assert.Equal(t, "tcp://offload-engine:2375", engines["offload"])
 }
 
-// TestBuildEnginesMapRespectsDockerHostEnv verifies that when DOCKER_HOST is
-// explicitly set, the default engine uses that value rather than the hard-coded
-// socket path.
-func TestBuildEnginesMapRespectsDockerHostEnv(t *testing.T) {
-	t.Setenv("DOCKER_HOST", "tcp://custom-host:2376")
-
-	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
-
-	cli := mocks.NewMockCli(mockCtrl)
-	cli.EXPECT().ContextStore().Return((*stubContextStore)(nil)).AnyTimes()
-
-	engines := buildEnginesMap(&types.Project{}, cli)
-
-	assert.Equal(t, "tcp://custom-host:2376", engines["default"])
-}
-
 // TestBuildEnginesMapNoXEngine verifies that a project with no x-engine
-// annotations still gets a valid "default" entry.
+// annotations still gets a valid "default" entry sourced from the active context.
 func TestBuildEnginesMapNoXEngine(t *testing.T) {
-	t.Setenv("DOCKER_HOST", "")
-
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 
-	// ContextStore should not be called when there are no x-engine annotations.
+	const currentContextEndpoint = "unix:///var/run/docker.sock"
+
+	mockAPIClient := mocks.NewMockAPIClient(mockCtrl)
+	mockAPIClient.EXPECT().DaemonHost().Return(currentContextEndpoint).AnyTimes()
+
 	cli := mocks.NewMockCli(mockCtrl)
+	cli.EXPECT().Client().Return(mockAPIClient).AnyTimes()
 
 	engines := buildEnginesMap(&types.Project{
 		Services: types.Services{
@@ -149,7 +136,7 @@ func TestBuildEnginesMapNoXEngine(t *testing.T) {
 		},
 	}, cli)
 
-	assert.Equal(t, "unix:///var/run/docker.sock", engines["default"])
+	assert.Equal(t, currentContextEndpoint, engines["default"])
 	_, hasOffload := engines["offload"]
 	assert.Assert(t, !hasOffload)
 }

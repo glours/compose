@@ -19,8 +19,6 @@ package compose
 import (
 	"context"
 	"fmt"
-	"os"
-	"runtime"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
@@ -95,45 +93,25 @@ func (c *clientOverrideCli) Client() client.APIClient {
 }
 
 // buildEnginesMap assembles the name→endpoint map that is passed to compose-coord.
-// "default" always maps to the local Docker socket, regardless of the active
-// context. This prevents a context switch (e.g. "docker offload start") from
-// routing all non-annotated services to a non-local engine. Additional entries
-// are derived from docker contexts whose names match the x-engine values used
-// in the project's services.
+// "default" maps to the endpoint of the currently active Docker context, exactly
+// as plain compose up behaves. Services without x-engine run on whatever the user
+// is currently pointed at — no special-casing, no hardcoded socket paths.
+// Additional entries are derived from docker contexts whose names match the
+// x-engine values used in the project's services.
 func buildEnginesMap(project *types.Project, dockerCli command.Cli) map[string]string {
+	// default = whatever context is currently active, exactly as plain compose up.
+	// This is the endpoint the user is already working with.
 	engines := map[string]string{
-		// Always use the local Docker socket as default, regardless of active context.
-		// This prevents the active context (e.g. "offload") from hijacking all
-		// services that don't have an x-engine annotation.
-		"default": resolveLocalDockerHost(),
+		"default": dockerCli.Client().DaemonHost(),
 	}
 	for _, svc := range project.Services {
-		engineName := multi.EngineForService(svc)
-		if engineName == "" {
-			continue
-		}
-		if _, already := engines[engineName]; already {
-			continue
-		}
-		if endpoint := contextEndpoint(dockerCli, engineName); endpoint != "" {
-			engines[engineName] = endpoint
+		if engine := multi.EngineForService(svc); engine != "" {
+			if endpoint := contextEndpoint(dockerCli, engine); endpoint != "" {
+				engines[engine] = endpoint
+			}
 		}
 	}
 	return engines
-}
-
-// resolveLocalDockerHost returns the local Docker daemon socket path,
-// independent of the active Docker context.
-func resolveLocalDockerHost() string {
-	// Respect DOCKER_HOST env var if explicitly set by the user
-	if h := os.Getenv("DOCKER_HOST"); h != "" {
-		return h
-	}
-	// Default Docker socket path
-	if runtime.GOOS == "windows" {
-		return "npipe:////./pipe/docker_engine"
-	}
-	return "unix:///var/run/docker.sock"
 }
 
 // contextEndpoint looks up a docker context by name and returns its host endpoint,
