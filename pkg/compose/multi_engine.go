@@ -84,13 +84,11 @@ func (s *composeService) apiClientForService(service types.ServiceConfig) client
 
 // buildEnginesMap assembles the name→endpoint map that is passed to compose-coord.
 // "default" maps to the endpoint of the currently active Docker context, exactly
-// as plain compose up behaves. Services without x-engine run on whatever the user
-// is currently pointed at — no special-casing, no hardcoded socket paths.
+// as plain compose up behaves. The coordinator will update this to the correct
+// local endpoint via POST /compose/engines once the provider captures it.
 // Additional entries are derived from docker contexts whose names match the
 // x-engine values used in the project's services.
 func buildEnginesMap(project *types.Project, dockerCli command.Cli) map[string]string {
-	// default = whatever context is currently active, exactly as plain compose up.
-	// This is the endpoint the user is already working with.
 	engines := map[string]string{
 		"default": dockerCli.Client().DaemonHost(),
 	}
