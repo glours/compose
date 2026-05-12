@@ -67,11 +67,15 @@ func (s *composeService) Create(ctx context.Context, project *types.Project, cre
 }
 
 func (s *composeService) create(ctx context.Context, project *types.Project, options api.CreateOptions) error {
-	// In multi-engine mode, route all API calls through the coordinator.
-	// This is a no-op when no x-engine annotations are present.
-	return s.withCoordClient(ctx, project, func() error {
-		return s.createImpl(ctx, project, options)
-	})
+	// For multi-engine projects, initialise the coordinator client once here.
+	// Container creation per service then uses apiClientForService() which
+	// routes only x-engine-annotated services through the coordinator.
+	// Provider services and all image/network/volume operations continue to
+	// use the standard Docker client.
+	if err := s.initCoordClient(ctx, project); err != nil {
+		return err
+	}
+	return s.createImpl(ctx, project, options)
 }
 
 func (s *composeService) createImpl(ctx context.Context, project *types.Project, options api.CreateOptions) error {

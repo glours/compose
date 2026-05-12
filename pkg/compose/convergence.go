@@ -653,18 +653,22 @@ func (s *composeService) recreateContainer(ctx context.Context, project *types.P
 		return created, err
 	}
 
+	// Use per-service client for stop/remove/rename so that multi-engine
+	// services are routed through the coordinator correctly.
+	engCli := s.apiClientForService(service)
+
 	timeoutInSecond := utils.DurationSecondToInt(timeout)
-	_, err = s.apiClient().ContainerStop(ctx, replaced.ID, client.ContainerStopOptions{Timeout: timeoutInSecond})
+	_, err = engCli.ContainerStop(ctx, replaced.ID, client.ContainerStopOptions{Timeout: timeoutInSecond})
 	if err != nil {
 		return created, err
 	}
 
-	_, err = s.apiClient().ContainerRemove(ctx, replaced.ID, client.ContainerRemoveOptions{})
+	_, err = engCli.ContainerRemove(ctx, replaced.ID, client.ContainerRemoveOptions{})
 	if err != nil {
 		return created, err
 	}
 
-	_, err = s.apiClient().ContainerRename(ctx, tmpName, client.ContainerRenameOptions{
+	_, err = engCli.ContainerRename(ctx, tmpName, client.ContainerRenameOptions{
 		NewName: name,
 	})
 	if err != nil {
@@ -712,7 +716,12 @@ func (s *composeService) createMobyContainer(ctx context.Context, project *types
 		plat = &p
 	}
 
-	response, err := s.apiClient().ContainerCreate(ctx, client.ContainerCreateOptions{
+	// Use per-service client so that services with x-engine go through the
+	// coordinator while all other services (including provider services) use
+	// the standard Docker client directly.
+	engCli := s.apiClientForService(service)
+
+	response, err := engCli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:             name,
 		Platform:         plat,
 		Config:           cfgs.Container,
@@ -747,20 +756,20 @@ func (s *composeService) createMobyContainer(ctx context.Context, project *types
 			}
 			epSettings, err := createEndpointSettings(project, service, number, networkKey, cfgs.Links, opts.UseNetworkAliases)
 			if err != nil {
-				_, _ = s.apiClient().ContainerRemove(ctx, response.ID, client.ContainerRemoveOptions{Force: true})
+				_, _ = engCli.ContainerRemove(ctx, response.ID, client.ContainerRemoveOptions{Force: true})
 				return created, err
 			}
-			if _, err := s.apiClient().NetworkConnect(ctx, mobyNetworkName, client.NetworkConnectOptions{
+			if _, err := engCli.NetworkConnect(ctx, mobyNetworkName, client.NetworkConnectOptions{
 				Container:      response.ID,
 				EndpointConfig: epSettings,
 			}); err != nil {
-				_, _ = s.apiClient().ContainerRemove(ctx, response.ID, client.ContainerRemoveOptions{Force: true})
+				_, _ = engCli.ContainerRemove(ctx, response.ID, client.ContainerRemoveOptions{Force: true})
 				return created, err
 			}
 		}
 	}
 
-	res, err := s.apiClient().ContainerInspect(ctx, response.ID, client.ContainerInspectOptions{})
+	res, err := engCli.ContainerInspect(ctx, response.ID, client.ContainerInspectOptions{})
 	if err != nil {
 		return created, err
 	}
@@ -918,7 +927,7 @@ func (s *composeService) startService(ctx context.Context,
 
 		eventName := getContainerProgressName(ctr)
 		s.events.On(newEvent(eventName, api.Working, api.StatusStarting))
-		_, err = s.apiClient().ContainerStart(ctx, ctr.ID, client.ContainerStartOptions{})
+		_, err = s.apiClientForService(service).ContainerStart(ctx, ctr.ID, client.ContainerStartOptions{})
 		if err != nil {
 			return err
 		}

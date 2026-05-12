@@ -51,45 +51,35 @@ func (s *composeService) clientForProject(ctx context.Context, project *types.Pr
 	return newCoordClient(meta.CoordSocket)
 }
 
-// withCoordClient temporarily overrides the docker client for this service to
-// point at the compose-coord coordinator socket and calls fn. The original
-// client is restored after fn returns. When the project carries no x-engine
-// annotations fn is called immediately with no changes.
-//
-// This is safe because the Up flow is single-threaded: only one create call is
-// in flight per composeService at a time.
-func (s *composeService) withCoordClient(ctx context.Context, project *types.Project, fn func() error) error {
+// initCoordClient ensures s.coordClient is initialised for the given project.
+// When the project carries no x-engine annotations this is a no-op.
+// The client is stored on the composeService and reused for subsequent calls;
+// it is safe for concurrent reads once set (it is set exactly once at the start
+// of the Create/Up flow, before any per-service goroutines are spawned).
+func (s *composeService) initCoordClient(ctx context.Context, project *types.Project) error {
 	if !multi.HasEngineAnnotations(project) {
-		return fn()
+		return nil
 	}
-
 	coordCli, err := s.clientForProject(ctx, project)
 	if err != nil {
 		return err
 	}
+	s.coordClient = coordCli
+	return nil
+}
 
-	// Temporarily swap dockerCli so all downstream apiClient() calls go to coord
-	origCli := s.dockerCli
-	s.dockerCli = &clientOverrideCli{
-		Cli:    s.dockerCli,
-		apiCli: coordCli,
+// apiClientForService returns the Docker API client to use when creating or
+// starting a container for the given service.
+//
+// Services annotated with x-engine are routed through the coordinator so that
+// the coordinator can place the container on the correct engine. All other
+// services (including provider services which have no containers at all) use
+// the standard Docker client.
+func (s *composeService) apiClientForService(service types.ServiceConfig) client.APIClient {
+	if s.coordClient != nil && multi.EngineForService(service) != "" {
+		return s.coordClient
 	}
-	defer func() {
-		s.dockerCli = origCli
-	}()
-
-	return fn()
-}
-
-// clientOverrideCli wraps command.Cli and overrides the Client() method so that
-// all Docker API calls go through the provided apiCli instead of the default one.
-type clientOverrideCli struct {
-	command.Cli
-	apiCli client.APIClient
-}
-
-func (c *clientOverrideCli) Client() client.APIClient {
-	return c.apiCli
+	return s.apiClient()
 }
 
 // buildEnginesMap assembles the name→endpoint map that is passed to compose-coord.

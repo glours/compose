@@ -217,6 +217,12 @@ type composeService struct {
 	dryRun         bool
 
 	runtimeAPIVersion runtimeVersionCache
+
+	// coordClient is the Docker API client pointed at the compose-coord coordinator.
+	// It is non-nil only for multi-engine projects (those with x-engine annotations).
+	// Safe for concurrent use once set; set once at the start of the Up/Create flow
+	// before any goroutines are spawned.
+	coordClient client.APIClient
 }
 
 // Close releases any connections/resources held by the underlying clients.
