@@ -37,6 +37,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/docker/compose/v5/pkg/api"
+	"github.com/docker/compose/v5/pkg/compose/multi"
 )
 
 type JsonMessage struct {
@@ -202,6 +203,13 @@ func (s *composeService) setupPluginCommand(ctx context.Context, project *types.
 	if err != nil {
 		return nil, err
 	}
+
+	// If a coordinator is running for this project, tell the provider its address
+	// so it can register engines dynamically via POST /compose/engines.
+	if meta, loadErr := multi.LoadMeta(project.Name); loadErr == nil && multi.IsRunning(meta) {
+		cmd.Env = append(cmd.Env, "COMPOSE_COORD_ADDR="+meta.CoordSocket)
+	}
+
 	return cmd, nil
 }
 
