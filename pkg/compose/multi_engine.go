@@ -154,10 +154,10 @@ func contextEndpoint(dockerCli command.Cli, contextName string) string {
 	return epMeta.Host
 }
 
-// newCoordClient returns a Docker SDK client that speaks to compose-coord over
-// the given unix socket path.
-func newCoordClient(socketPath string) (client.APIClient, error) {
+// newCoordClient returns a Docker SDK client that speaks to compose-coord at
+// the given address. coordAddr may be "tcp://host:port" or "unix:///path".
+func newCoordClient(coordAddr string) (client.APIClient, error) {
 	return client.New(
-		client.WithHost("unix://" + socketPath),
+		client.WithHost(coordAddr),
 	)
 }

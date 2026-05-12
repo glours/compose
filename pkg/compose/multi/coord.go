@@ -23,11 +23,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 )
 
-// CoordSocket returns the Docker API socket path for the coordinator.
+// CoordSocket returns the Docker API address for the coordinator.
 // If no coordinator is running for this project it spawns one.
 // The coordinator binary must be on PATH as "compose-coord".
 func CoordSocket(ctx context.Context, meta *ProjectMeta, engines map[string]string) (string, error) {
@@ -41,7 +42,7 @@ func CoordSocket(ctx context.Context, meta *ProjectMeta, engines map[string]stri
 	return spawned.CoordSocket, nil
 }
 
-// IsRunning checks if the coord process is alive and its socket is reachable.
+// IsRunning checks if the coord process is alive and its address is reachable.
 func IsRunning(meta *ProjectMeta) bool {
 	if meta == nil || meta.CoordSocket == "" {
 		return false
@@ -57,8 +58,14 @@ func IsRunning(meta *ProjectMeta) bool {
 			return false
 		}
 	}
-	// Verify the socket is accessible
-	conn, err := net.DialTimeout("unix", meta.CoordSocket, time.Second)
+	// Verify the address is accessible — support both tcp:// and unix://
+	addr := meta.CoordSocket
+	network := "unix"
+	if strings.HasPrefix(addr, "tcp://") {
+		addr = strings.TrimPrefix(addr, "tcp://")
+		network = "tcp"
+	}
+	conn, err := net.DialTimeout(network, addr, time.Second)
 	if err != nil {
 		return false
 	}
@@ -66,19 +73,33 @@ func IsRunning(meta *ProjectMeta) bool {
 	return true
 }
 
+// findFreePort finds a free TCP port on localhost by binding to port 0 and
+// immediately releasing it.
+func findFreePort() (int, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port, nil
+}
+
 // SpawnCoord starts compose-coord as a background process.
 // engines is a map of name→endpoint, e.g.
 //
 //	{"default": "unix:///var/run/docker.sock", "local-vm": "tcp://192.168.64.10:2375"}
 func SpawnCoord(ctx context.Context, projectName string, engines map[string]string) (*ProjectMeta, error) {
-	socketPath := fmt.Sprintf("/tmp/compose-coord-%s.sock", projectName)
-
-	// Remove stale socket if present
-	_ = os.Remove(socketPath)
+	port, err := findFreePort()
+	if err != nil {
+		return nil, fmt.Errorf("finding free port for coordinator: %w", err)
+	}
+	listenAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	coordAddr := fmt.Sprintf("tcp://%s", listenAddr)
 
 	args := []string{
 		fmt.Sprintf("--project=%s", projectName),
-		fmt.Sprintf("--listen=unix://%s", socketPath),
+		fmt.Sprintf("--listen=%s", listenAddr), // TCP host:port, not unix://
 	}
 	for name, endpoint := range engines {
 		args = append(args, fmt.Sprintf("--engine=%s=%s", name, endpoint))
@@ -96,7 +117,7 @@ func SpawnCoord(ctx context.Context, projectName string, engines map[string]stri
 
 	meta := &ProjectMeta{
 		ProjectName: projectName,
-		CoordSocket: socketPath,
+		CoordSocket: coordAddr, // e.g. tcp://127.0.0.1:54321
 		CoordPID:    cmd.Process.Pid,
 	}
 	if err := SaveMeta(meta); err != nil {
@@ -107,31 +128,43 @@ func SpawnCoord(ctx context.Context, projectName string, engines map[string]stri
 	// Wait up to 10 seconds for the coordinator to be ready
 	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := WaitForReady(waitCtx, socketPath); err != nil {
+	if err := WaitForReady(waitCtx, coordAddr); err != nil {
 		return nil, fmt.Errorf("coordinator did not become ready: %w", err)
 	}
 
 	return meta, nil
 }
 
-// WaitForReady polls the coord socket until /_ping returns 200 or ctx is cancelled.
-func WaitForReady(ctx context.Context, socketPath string) error {
-	transport := &http.Transport{
-		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", socketPath)
-		},
-	}
-	httpClient := &http.Client{Transport: transport}
+// WaitForReady polls the coord address until /_ping returns 200 or ctx is cancelled.
+// coordAddr may be "tcp://host:port" or "unix:///path/to/socket".
+func WaitForReady(ctx context.Context, coordAddr string) error {
+	var pingURL string
+	var transport *http.Transport
 
+	if strings.HasPrefix(coordAddr, "tcp://") {
+		host := strings.TrimPrefix(coordAddr, "tcp://")
+		pingURL = fmt.Sprintf("http://%s/_ping", host)
+		transport = &http.Transport{}
+	} else {
+		socketPath := strings.TrimPrefix(coordAddr, "unix://")
+		pingURL = "http://localhost/_ping"
+		transport = &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		}
+	}
+
+	httpClient := &http.Client{Transport: transport}
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for coordinator socket %s: %w", socketPath, ctx.Err())
+			return fmt.Errorf("timed out waiting for coordinator at %s: %w", coordAddr, ctx.Err())
 		case <-ticker.C:
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/_ping", http.NoBody)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, pingURL, http.NoBody)
 			if err != nil {
 				continue
 			}
