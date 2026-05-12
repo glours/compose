@@ -43,6 +43,7 @@ import (
 	cdi "tags.cncf.io/container-device-interface/pkg/parser"
 
 	"github.com/docker/compose/v5/pkg/api"
+	"github.com/docker/compose/v5/pkg/compose/multi"
 )
 
 type createOptions struct {
@@ -66,6 +67,14 @@ func (s *composeService) Create(ctx context.Context, project *types.Project, cre
 }
 
 func (s *composeService) create(ctx context.Context, project *types.Project, options api.CreateOptions) error {
+	// In multi-engine mode, route all API calls through the coordinator.
+	// This is a no-op when no x-engine annotations are present.
+	return s.withCoordClient(ctx, project, func() error {
+		return s.createImpl(ctx, project, options)
+	})
+}
+
+func (s *composeService) createImpl(ctx context.Context, project *types.Project, options api.CreateOptions) error {
 	if len(options.Services) == 0 {
 		options.Services = project.ServiceNames()
 	}
@@ -511,6 +520,12 @@ func (s *composeService) prepareLabels(labels types.Labels, service types.Servic
 		dependencies = append(dependencies, fmt.Sprintf("%s:%s:%t", s, d.Condition, d.Restart))
 	}
 	labels[api.DependenciesLabel] = strings.Join(dependencies, ",")
+
+	// Inject the target-engine label when x-engine is set on the service
+	if engine := multi.EngineForService(service); engine != "" {
+		labels[api.EngineLabel] = engine
+	}
+
 	return labels, nil
 }
 

@@ -161,7 +161,7 @@ func runPs(ctx context.Context, dockerCli command.Cli, backendOptions *BackendOp
 		Format: formatter.NewContainerFormat(opts.Format, opts.Quiet, false),
 		Trunc:  !opts.noTrunc,
 	}
-	return formatter.ContainerWrite(containerCtx, containers)
+	return formatter.ContainerWriteWithEngineColumn(containerCtx, containers)
 }
 
 func filterByStatus(containers []api.ContainerSummary, statuses []string) []api.ContainerSummary {

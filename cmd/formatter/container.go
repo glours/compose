@@ -32,7 +32,8 @@ import (
 )
 
 const (
-	defaultContainerTableFormat = "table {{.Name}}\t{{.Image}}\t{{.Command}}\t{{.Service}}\t{{.RunningFor}}\t{{.Status}}\t{{.Ports}}"
+	defaultContainerTableFormat     = "table {{.Name}}\t{{.Image}}\t{{.Command}}\t{{.Service}}\t{{.RunningFor}}\t{{.Status}}\t{{.Ports}}"
+	multiEngineContainerTableFormat = "table {{.Name}}\t{{.Image}}\t{{.Command}}\t{{.Service}}\t{{.RunningFor}}\t{{.Status}}\t{{.Ports}}\t{{.Engine}}"
 
 	nameHeader       = "NAME"
 	projectHeader    = "PROJECT"
@@ -42,6 +43,7 @@ const (
 	mountsHeader     = "MOUNTS"
 	localVolumes     = "LOCAL VOLUMES"
 	networksHeader   = "NETWORKS"
+	engineHeader     = "ENGINE"
 )
 
 // NewContainerFormat returns a Format for rendering using a Context
@@ -82,6 +84,28 @@ ports: {{- pad .Ports 1 0}}
 	}
 }
 
+// newContainerFormatWithEngine returns a table format that includes the ENGINE
+// column when any of the provided containers has the CoordEngineLabel set.
+func newContainerFormatWithEngine(source string, quiet bool, size bool, containers []api.ContainerSummary) formatter.Format {
+	if source != formatter.TableFormatKey && source != "" {
+		// Non-table format: don't add ENGINE column automatically
+		return NewContainerFormat(source, quiet, size)
+	}
+	for _, c := range containers {
+		if c.Labels[api.CoordEngineLabel] != "" {
+			if quiet {
+				return formatter.DefaultQuietFormat
+			}
+			format := multiEngineContainerTableFormat
+			if size {
+				format += `\t{{.Size}}`
+			}
+			return formatter.Format(format)
+		}
+	}
+	return NewContainerFormat(source, quiet, size)
+}
+
 // ContainerWrite renders the context for a list of containers
 func ContainerWrite(ctx formatter.Context, containers []api.ContainerSummary) error {
 	render := func(format func(subContext formatter.SubContext) error) error {
@@ -94,6 +118,17 @@ func ContainerWrite(ctx formatter.Context, containers []api.ContainerSummary) er
 		return nil
 	}
 	return ctx.Write(NewContainerContext(), render)
+}
+
+// ContainerWriteWithEngineColumn is like ContainerWrite but automatically adds
+// the ENGINE column when any container carries the com.docker.compose.coord.engine label.
+func ContainerWriteWithEngineColumn(ctx formatter.Context, containers []api.ContainerSummary) error {
+	format := ctx.Format
+	if format == "" || string(format) == string(formatter.Format(formatter.TableFormatKey)) {
+		format = newContainerFormatWithEngine(string(format), false, false, containers)
+		ctx.Format = format
+	}
+	return ContainerWrite(ctx, containers)
 }
 
 // ContainerContext is a struct used for rendering a list of containers in a Go template.
@@ -126,6 +161,7 @@ func NewContainerContext() *ContainerContext {
 		"Status":     formatter.StatusHeader,
 		"Size":       formatter.SizeHeader,
 		"Labels":     formatter.LabelsHeader,
+		"Engine":     engineHeader,
 	}
 	return &containerCtx
 }
@@ -276,6 +312,16 @@ func (c *ContainerContext) LocalVolumes() string {
 // attached to.
 func (c *ContainerContext) Networks() string {
 	return strings.Join(c.c.Networks, ",")
+}
+
+// Engine returns the engine name set by compose-coord on aggregated container
+// lists (com.docker.compose.coord.engine label). Returns "" for single-engine
+// projects.
+func (c *ContainerContext) Engine() string {
+	if c.c.Labels == nil {
+		return ""
+	}
+	return c.c.Labels[api.CoordEngineLabel]
 }
 
 // Size returns the container's size and virtual size (e.g. "2B (virtual 21.5MB)")
