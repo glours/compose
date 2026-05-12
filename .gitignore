@@ -4,3 +4,7 @@ coverage.out
 covdatafiles/
 .DS_Store
 pkg/e2e/*.tar
+
+# cloned sibling repos
+compose-agent/
+compose-coord/
