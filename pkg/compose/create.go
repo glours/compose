@@ -299,17 +299,7 @@ func (s *composeService) getCreateConfigs(ctx context.Context,
 		dnsIPs = append(dnsIPs, dnsIP)
 	}
 
-	// In multi-engine mode, inject the agent's DNS resolver so that containers
-	// on remote engines can resolve service names via compose.internal.
-	var dnsSearch []string
-	if multi.HasEngineAnnotations(p) && multi.EngineForService(service) != "" {
-		// 127.0.0.11 is where the compose-agent DNS resolver listens on the remote engine.
-		agentDNS, _ := netip.ParseAddr("127.0.0.11")
-		dnsIPs = append([]netip.Addr{agentDNS}, dnsIPs...)
-		dnsSearch = append([]string{"compose.internal"}, service.DNSSearch...)
-	} else {
-		dnsSearch = service.DNSSearch
-	}
+	dnsSearch := service.DNSSearch
 
 	hostConfig := container.HostConfig{
 		AutoRemove:     opts.AutoRemove,
