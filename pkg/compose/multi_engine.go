@@ -28,6 +28,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/moby/moby/client"
+	"github.com/sirupsen/logrus"
 
 	"github.com/docker/compose/v5/pkg/compose/multi"
 )
@@ -73,7 +74,12 @@ func (s *composeService) initCoordClient(ctx context.Context, project *types.Pro
 	// Send the project service→engine map to the coordinator so it can route
 	// image pulls and container creates to the correct engine even when the
 	// com.docker.compose.engine label is absent (e.g. during image pull).
-	return s.sendProjectConfig(ctx, project)
+	if err := s.sendProjectConfig(ctx, project); err != nil {
+		// Non-fatal — coordinator is running but project config wasn't delivered.
+		// This happens when the coordinator just started and isn't ready yet.
+		logrus.Debugf("multi-engine: %v", err)
+	}
+	return nil
 }
 
 // sendProjectConfig posts the service→engine routing map for the project to
@@ -118,6 +124,9 @@ func (s *composeService) sendProjectConfig(ctx context.Context, project *types.P
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		// EOF or connection refused means the coordinator died.
+		// Clear the cache so the next initCoordClient call respawns it.
+		_ = multi.DeleteMeta(project.Name)
 		return fmt.Errorf("sending project config to coordinator: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
@@ -127,12 +136,12 @@ func (s *composeService) sendProjectConfig(ctx context.Context, project *types.P
 // apiClientForService returns the Docker API client to use when creating or
 // starting a container for the given service.
 //
-// Services annotated with x-engine are routed through the coordinator so that
-// the coordinator can place the container on the correct engine. All other
-// services (including provider services which have no containers at all) use
-// the standard Docker client.
-func (s *composeService) apiClientForService(service types.ServiceConfig) client.APIClient {
-	if s.coordClient != nil && multi.EngineForService(service) != "" {
+// In multi-engine mode, ALL container operations go through the coordinator.
+// The coordinator routes annotated services to their target engine and
+// non-annotated services to the default engine (local Docker Desktop).
+// This ensures the correct API version is used for each engine.
+func (s *composeService) apiClientForService(_ types.ServiceConfig) client.APIClient {
+	if s.coordClient != nil {
 		return s.coordClient
 	}
 	return s.apiClient()
