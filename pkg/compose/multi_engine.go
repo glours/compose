@@ -17,8 +17,12 @@
 package compose
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
@@ -65,6 +69,58 @@ func (s *composeService) initCoordClient(ctx context.Context, project *types.Pro
 		return err
 	}
 	s.coordClient = coordCli
+
+	// Send the project service→engine map to the coordinator so it can route
+	// image pulls and container creates to the correct engine even when the
+	// com.docker.compose.engine label is absent (e.g. during image pull).
+	return s.sendProjectConfig(ctx, project)
+}
+
+// sendProjectConfig posts the service→engine routing map for the project to
+// the coordinator's POST /compose/project endpoint.  This is a best-effort
+// call: if the coordinator is not running or unreachable the error is logged
+// and swallowed so the normal compose flow is not interrupted.
+func (s *composeService) sendProjectConfig(ctx context.Context, project *types.Project) error {
+	meta, err := multi.LoadMeta(project.Name)
+	if err != nil || !multi.IsRunning(meta) {
+		// Coordinator not running or metadata missing — skip silently.
+		return nil
+	}
+
+	// Build the service→engine map.
+	services := make(map[string]string, len(project.Services))
+	for name, svc := range project.Services {
+		engine := multi.EngineForService(svc)
+		if engine == "" {
+			engine = "default"
+		}
+		services[name] = engine
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"project":  project.Name,
+		"services": services,
+	})
+	if err != nil {
+		return fmt.Errorf("marshalling project config: %w", err)
+	}
+
+	// The coordinator listens on a tcp:// address; strip the scheme for use in
+	// an http:// URL.
+	host := strings.TrimPrefix(meta.CoordSocket, "tcp://")
+	url := fmt.Sprintf("http://%s/compose/project", host)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("building project config request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sending project config to coordinator: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
 	return nil
 }
 
