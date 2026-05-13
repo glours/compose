@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -43,35 +44,53 @@ func CoordSocket(ctx context.Context, meta *ProjectMeta, engines map[string]stri
 	return spawned.CoordSocket, nil
 }
 
-// IsRunning checks if the coord process is alive and its address is reachable.
+// IsRunning checks if the coordinator's address is reachable.
+// The PID check is intentionally omitted: a stale PID file may point to a
+// dead or replaced process, so the socket dial is the authoritative check.
 func IsRunning(meta *ProjectMeta) bool {
 	if meta == nil || meta.CoordSocket == "" {
 		return false
 	}
-	// Check if the process is still alive (best-effort: PID 0 means external)
-	if meta.CoordPID > 0 {
-		proc, err := os.FindProcess(meta.CoordPID)
-		if err != nil {
-			return false
-		}
-		// Signal 0 checks if the process exists without sending an actual signal
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
-			return false
-		}
-	}
-	// Verify the address is accessible — support both tcp:// and unix://
+	// Primary check: can we actually reach the coordinator?
 	addr := meta.CoordSocket
-	network := "unix"
-	if strings.HasPrefix(addr, "tcp://") {
+	network := "tcp"
+	if strings.HasPrefix(addr, "unix://") {
+		addr = strings.TrimPrefix(addr, "unix://")
+		network = "unix"
+	} else if strings.HasPrefix(addr, "tcp://") {
 		addr = strings.TrimPrefix(addr, "tcp://")
-		network = "tcp"
 	}
-	conn, err := net.DialTimeout(network, addr, time.Second)
+	conn, err := net.DialTimeout(network, addr, 2*time.Second)
 	if err != nil {
 		return false
 	}
 	_ = conn.Close()
 	return true
+}
+
+// killExistingCoord kills any running compose-coord process for the given project.
+// This prevents coordinator accumulation when project metadata is deleted and
+// compose up is re-run.
+func killExistingCoord(projectName string) {
+	// Find processes matching "compose-coord --project=<name>"
+	// Use pgrep or scan /proc on Linux
+	out, err := exec.Command("pgrep", "-f", "compose-coord.*--project="+projectName).Output() //nolint:gosec
+	if err != nil {
+		return // no matching processes
+	}
+	for _, pidStr := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil {
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		_ = proc.Signal(syscall.SIGTERM)
+	}
+	// Give processes a moment to exit
+	time.Sleep(500 * time.Millisecond)
 }
 
 // findFreePort finds a free TCP port on localhost by binding to port 0 and
@@ -91,6 +110,9 @@ func findFreePort() (int, error) {
 //
 //	{"default": "unix:///var/run/docker.sock", "local-vm": "tcp://192.168.64.10:2375"}
 func SpawnCoord(ctx context.Context, projectName string, engines map[string]string) (*ProjectMeta, error) {
+	// Kill any existing coordinator for this project to prevent accumulation
+	killExistingCoord(projectName)
+
 	port, err := findFreePort()
 	if err != nil {
 		return nil, fmt.Errorf("finding free port for coordinator: %w", err)
