@@ -147,24 +147,60 @@ func (s *composeService) apiClientForService(_ types.ServiceConfig) client.APICl
 	return s.apiClient()
 }
 
+// knownOffloadContextNames are the context names that Docker Offload / Docker Cloud
+// creates. Tried in order when x-engine: offload is declared but no exact
+// context match is found.
+var knownOffloadContextNames = []string{"offload", "cloud", "docker-cloud", "desktop-offload"}
+
 // buildEnginesMap assembles the name→endpoint map that is passed to compose-coord.
-// "default" maps to the endpoint of the currently active Docker context, exactly
-// as plain compose up behaves. The coordinator will update this to the correct
-// local endpoint via POST /compose/engines once the provider captures it.
-// Additional entries are derived from docker contexts whose names match the
-// x-engine values used in the project's services.
+// "default" maps to the local Desktop socket (desktop-linux / desktop-windows),
+// falling back to the active context's DaemonHost on Linux where Docker Desktop
+// is not present. Additional entries are derived from docker contexts whose names
+// match the x-engine values used in the project's services. When an x-engine
+// value does not match an exact context name, well-known alternative names are
+// tried (e.g. "docker-cloud" for "offload").
 func buildEnginesMap(project *types.Project, dockerCli command.Cli) map[string]string {
 	engines := map[string]string{
-		"default": dockerCli.Client().DaemonHost(),
+		"default": resolveDefaultEngine(dockerCli),
 	}
 	for _, svc := range project.Services {
-		if engine := multi.EngineForService(svc); engine != "" {
-			if endpoint := contextEndpoint(dockerCli, engine); endpoint != "" {
-				engines[engine] = endpoint
+		engine := multi.EngineForService(svc)
+		if engine == "" {
+			continue
+		}
+		// Try exact context name match first.
+		if endpoint := contextEndpoint(dockerCli, engine); endpoint != "" {
+			engines[engine] = endpoint
+			continue
+		}
+		// For "offload", scan known Offload context names.
+		if engine == "offload" {
+			for _, name := range knownOffloadContextNames {
+				if endpoint := contextEndpoint(dockerCli, name); endpoint != "" {
+					engines[engine] = endpoint
+					break
+				}
 			}
 		}
 	}
 	return engines
+}
+
+// resolveDefaultEngine returns the Docker socket for the local engine.
+// It prefers the Docker Desktop context (desktop-linux on Mac, desktop-windows
+// on Windows) so that services without x-engine always run locally, even when
+// an Offload context (docker-cloud) is the active context.
+// On plain Linux (no Docker Desktop) it falls back to the active client's
+// DaemonHost, which is the correct local socket.
+func resolveDefaultEngine(dockerCli command.Cli) string {
+	if endpoint := contextEndpoint(dockerCli, "desktop-linux"); endpoint != "" {
+		return endpoint
+	}
+	if endpoint := contextEndpoint(dockerCli, "desktop-windows"); endpoint != "" {
+		return endpoint
+	}
+	// Plain Linux: no Desktop context present, use the active client's host.
+	return dockerCli.Client().DaemonHost()
 }
 
 // contextEndpoint looks up a docker context by name and returns its host endpoint,
