@@ -215,7 +215,7 @@ func (s *composeService) getLocalImagesDigests(ctx context.Context, project *typ
 			if err != nil {
 				return nil, err
 			}
-			inspect, err := s.apiClient().ImageInspect(ctx, img.ID)
+			inspect, err := s.apiClientForList().ImageInspect(ctx, img.ID)
 			if err != nil {
 				return nil, err
 			}

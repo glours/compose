@@ -37,7 +37,7 @@ import (
 
 func (s *composeService) Images(ctx context.Context, projectName string, options api.ImagesOptions) (map[string]api.ImageSummary, error) {
 	projectName = strings.ToLower(projectName)
-	allContainers, err := s.apiClient().ContainerList(ctx, client.ContainerListOptions{
+	allContainers, err := s.apiClientForList().ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: projectFilter(projectName),
 	})
@@ -69,14 +69,14 @@ func (s *composeService) Images(ctx context.Context, projectName string, options
 	eg, ctx := errgroup.WithContext(ctx)
 	for _, c := range containers {
 		eg.Go(func() error {
-			image, err := s.apiClient().ImageInspect(ctx, c.Image)
+			image, err := s.apiClientForList().ImageInspect(ctx, c.Image)
 			if err != nil {
 				return err
 			}
 			id := image.ID // platform-specific image ID can't be combined with image tag, see https://github.com/moby/moby/issues/49995
 
 			if withPlatform && c.ImageManifestDescriptor != nil && c.ImageManifestDescriptor.Platform != nil {
-				image, err = s.apiClient().ImageInspect(ctx, c.Image, client.ImageInspectWithPlatform(c.ImageManifestDescriptor.Platform))
+				image, err = s.apiClientForList().ImageInspect(ctx, c.Image, client.ImageInspectWithPlatform(c.ImageManifestDescriptor.Platform))
 				if err != nil {
 					return err
 				}
@@ -131,7 +131,7 @@ func (s *composeService) getImageSummaries(ctx context.Context, repoTags []strin
 	eg, ctx := errgroup.WithContext(ctx)
 	for _, repoTag := range repoTags {
 		eg.Go(func() error {
-			inspect, err := s.apiClient().ImageInspect(ctx, repoTag)
+			inspect, err := s.apiClientForList().ImageInspect(ctx, repoTag)
 			if err != nil {
 				if errdefs.IsNotFound(err) {
 					return nil
