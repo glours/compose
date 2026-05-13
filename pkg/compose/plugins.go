@@ -208,7 +208,7 @@ func (s *composeService) setupPluginCommand(ctx context.Context, project *types.
 	// so it can register engines dynamically via POST /compose/engines.
 	if meta, loadErr := multi.LoadMeta(project.Name); loadErr == nil && multi.IsRunning(meta) {
 		cmd.Env = append(cmd.Env, "COMPOSE_COORD_ADDR="+meta.CoordSocket)
-		cmd.Env = append(cmd.Env, "COMPOSE_LOCAL_ENGINE="+s.dockerCli.Client().DaemonHost())
+		cmd.Env = append(cmd.Env, "COMPOSE_LOCAL_ENGINE="+resolveDefaultEngine(s.dockerCli))
 	}
 
 	return cmd, nil
