@@ -108,16 +108,18 @@ func SpawnCoord(ctx context.Context, projectName string, engines map[string]stri
 
 	var stderrBuf bytes.Buffer
 	cmd := exec.CommandContext(ctx, "compose-coord", args...) //nolint:gosec
-	cmd.Stderr = &stderrBuf                                   // capture stderr for error reporting
 	// Detach from this process group so the coordinator survives the CLI exiting
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	// Write coord logs to a temp file for debugging
+	// Write coord logs to a temp file for debugging (stdout + stderr)
 	logPath := fmt.Sprintf("/tmp/compose-coord-%s.log", projectName)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err == nil {
 		cmd.Stdout = logFile
+		cmd.Stderr = logFile // capture stderr too (slog writes to stderr by default)
 		defer func() { _ = logFile.Close() }()
+	} else {
+		cmd.Stderr = &stderrBuf // fallback: capture stderr for error reporting
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -138,12 +140,12 @@ func SpawnCoord(ctx context.Context, projectName string, engines map[string]stri
 	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := WaitForReady(waitCtx, coordAddr); err != nil {
-		// Include stderr in error message for debuggability
+		// Include stderr in error message for debuggability (used when log file creation failed)
 		stderr := strings.TrimSpace(stderrBuf.String())
 		if stderr != "" {
 			return nil, fmt.Errorf("coordinator did not become ready: %w\ncoord stderr: %s", err, stderr)
 		}
-		return nil, fmt.Errorf("coordinator did not become ready: %w", err)
+		return nil, fmt.Errorf("coordinator did not become ready: %w (logs: %s)", err, logPath)
 	}
 
 	return meta, nil
