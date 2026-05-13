@@ -158,7 +158,7 @@ func runPs(ctx context.Context, dockerCli command.Cli, backendOptions *BackendOp
 
 	containerCtx := cliformatter.Context{
 		Output: dockerCli.Out(),
-		Format: formatter.NewContainerFormat(opts.Format, opts.Quiet, false),
+		Format: cliformatter.Format(opts.Format),
 		Trunc:  !opts.noTrunc,
 	}
 	return formatter.ContainerWriteWithEngineColumn(containerCtx, containers)
