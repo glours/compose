@@ -173,6 +173,30 @@ func SpawnCoord(ctx context.Context, projectName string, engines map[string]stri
 	return meta, nil
 }
 
+// StopCoord sends SIGTERM to the coordinator process for the given project and
+// removes the project metadata file. It is a best-effort cleanup call and is
+// called by the Down flow after all containers and networks have been removed.
+func StopCoord(projectName string) error {
+	meta, err := LoadMeta(projectName)
+	if err != nil {
+		// No metadata file — coordinator was never started or already cleaned up.
+		return nil
+	}
+
+	// Send SIGTERM to the coordinator process.
+	if meta.CoordPID > 0 {
+		if proc, findErr := os.FindProcess(meta.CoordPID); findErr == nil {
+			_ = proc.Signal(syscall.SIGTERM)
+		}
+	}
+
+	// Also kill by name in case the PID is stale.
+	killExistingCoord(projectName)
+
+	// Remove project metadata file.
+	return DeleteMeta(projectName)
+}
+
 // WaitForReady polls the coord address until /_ping returns 200 or ctx is cancelled.
 // coordAddr may be "tcp://host:port" or "unix:///path/to/socket".
 func WaitForReady(ctx context.Context, coordAddr string) error {

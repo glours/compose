@@ -31,6 +31,16 @@ import (
 //nolint:gocyclo
 func (s *composeService) Ps(ctx context.Context, projectName string, options api.PsOptions) ([]api.ContainerSummary, error) {
 	projectName = strings.ToLower(projectName)
+
+	// In multi-engine mode, ensure the coordinator client is initialised so that
+	// getContainers and ContainerInspect are routed through the coordinator and
+	// the com.docker.compose.coord.engine label is populated in the results.
+	if options.Project != nil {
+		if err := s.initCoordClient(ctx, options.Project); err != nil {
+			return nil, err
+		}
+	}
+
 	oneOff := oneOffExclude
 	if options.All {
 		oneOff = oneOffInclude
@@ -64,7 +74,7 @@ func (s *composeService) Ps(ctx context.Context, projectName string, options api
 				}
 			}
 
-			inspect, err := s.apiClient().ContainerInspect(ctx, ctr.ID, client.ContainerInspectOptions{})
+			inspect, err := s.apiClientForList().ContainerInspect(ctx, ctr.ID, client.ContainerInspectOptions{})
 			if err != nil {
 				return err
 			}

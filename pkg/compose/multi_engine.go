@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
@@ -74,10 +75,21 @@ func (s *composeService) initCoordClient(ctx context.Context, project *types.Pro
 	// Send the project service→engine map to the coordinator so it can route
 	// image pulls and container creates to the correct engine even when the
 	// com.docker.compose.engine label is absent (e.g. during image pull).
-	if err := s.sendProjectConfig(ctx, project); err != nil {
+	// Retry up to 3 times in case the coordinator just started and isn't
+	// fully ready yet (race between WaitForReady and the project endpoint).
+	var sendErr error
+	for i := range 3 {
+		if sendErr = s.sendProjectConfig(ctx, project); sendErr == nil {
+			break
+		}
+		if i < 2 {
+			time.Sleep(time.Second)
+		}
+	}
+	if sendErr != nil {
 		// Non-fatal — coordinator is running but project config wasn't delivered.
-		// This happens when the coordinator just started and isn't ready yet.
-		logrus.Debugf("multi-engine: %v", err)
+		// Log a warning; container operations will still work via label-based routing.
+		logrus.Warnf("multi-engine: could not send project config to coordinator: %v", sendErr)
 	}
 	return nil
 }
@@ -141,6 +153,16 @@ func (s *composeService) sendProjectConfig(ctx context.Context, project *types.P
 // non-annotated services to the default engine (local Docker Desktop).
 // This ensures the correct API version is used for each engine.
 func (s *composeService) apiClientForService(_ types.ServiceConfig) client.APIClient {
+	if s.coordClient != nil {
+		return s.coordClient
+	}
+	return s.apiClient()
+}
+
+// apiClientForList returns the Docker API client to use for listing/inspecting
+// containers. In multi-engine mode this is the coordinator client so that all
+// engines are queried and the ENGINE label is injected into the results.
+func (s *composeService) apiClientForList() client.APIClient {
 	if s.coordClient != nil {
 		return s.coordClient
 	}
