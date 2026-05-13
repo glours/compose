@@ -686,7 +686,7 @@ func (s *composeService) startContainer(ctx context.Context, ctr container.Summa
 	s.events.On(newEvent(getContainerProgressName(ctr), api.Working, "Restart"))
 	startMx.Lock()
 	defer startMx.Unlock()
-	_, err := s.apiClient().ContainerStart(ctx, ctr.ID, client.ContainerStartOptions{})
+	_, err := s.apiClientForList().ContainerStart(ctx, ctr.ID, client.ContainerStartOptions{})
 	if err != nil {
 		return err
 	}
@@ -842,7 +842,7 @@ func (s *composeService) getLinks(ctx context.Context, projectName string, servi
 
 func (s *composeService) isServiceHealthy(ctx context.Context, containers Containers, fallbackRunning bool) (bool, error) {
 	for _, c := range containers {
-		res, err := s.apiClient().ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
+		res, err := s.apiClientForList().ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
 		if err != nil {
 			return false, err
 		}
@@ -878,7 +878,7 @@ func (s *composeService) isServiceHealthy(ctx context.Context, containers Contai
 
 func (s *composeService) isServiceCompleted(ctx context.Context, containers Containers) (bool, int, error) {
 	for _, c := range containers {
-		res, err := s.apiClient().ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
+		res, err := s.apiClientForList().ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
 		if err != nil {
 			return false, 0, err
 		}
