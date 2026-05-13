@@ -200,7 +200,7 @@ func (s *composeService) pullServiceImage(ctx context.Context, service types.Ser
 		ociPlatforms = append(ociPlatforms, p)
 	}
 
-	stream, err := s.apiClientForList().ImagePull(ctx, service.Image, client.ImagePullOptions{
+	stream, err := s.apiClient().ImagePull(ctx, service.Image, client.ImagePullOptions{
 		RegistryAuth: encodedAuth,
 		Platforms:    ociPlatforms,
 	})
@@ -248,7 +248,7 @@ func (s *composeService) pullServiceImage(ctx context.Context, service types.Ser
 	}
 	s.events.On(newEvent(resource, api.Done, api.StatusPulled))
 
-	inspected, err := s.apiClientForList().ImageInspect(ctx, service.Image)
+	inspected, err := s.apiClient().ImageInspect(ctx, service.Image)
 	if err != nil {
 		return "", err
 	}
