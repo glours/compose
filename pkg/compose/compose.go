@@ -238,6 +238,9 @@ func (s *composeService) Close() error {
 }
 
 func (s *composeService) apiClient() client.APIClient {
+	if s.coordClient != nil {
+		return s.coordClient
+	}
 	return s.dockerCli.Client()
 }
 

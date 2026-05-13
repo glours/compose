@@ -653,9 +653,7 @@ func (s *composeService) recreateContainer(ctx context.Context, project *types.P
 		return created, err
 	}
 
-	// Use per-service client for stop/remove/rename so that multi-engine
-	// services are routed through the coordinator correctly.
-	engCli := s.apiClientForService(service)
+	engCli := s.apiClient()
 
 	timeoutInSecond := utils.DurationSecondToInt(timeout)
 	_, err = engCli.ContainerStop(ctx, replaced.ID, client.ContainerStopOptions{Timeout: timeoutInSecond})
@@ -686,7 +684,7 @@ func (s *composeService) startContainer(ctx context.Context, ctr container.Summa
 	s.events.On(newEvent(getContainerProgressName(ctr), api.Working, "Restart"))
 	startMx.Lock()
 	defer startMx.Unlock()
-	_, err := s.apiClientForList().ContainerStart(ctx, ctr.ID, client.ContainerStartOptions{})
+	_, err := s.apiClient().ContainerStart(ctx, ctr.ID, client.ContainerStartOptions{})
 	if err != nil {
 		return err
 	}
@@ -716,10 +714,8 @@ func (s *composeService) createMobyContainer(ctx context.Context, project *types
 		plat = &p
 	}
 
-	// Use per-service client so that services with x-engine go through the
-	// coordinator while all other services (including provider services) use
-	// the standard Docker client directly.
-	engCli := s.apiClientForService(service)
+	// Use apiClient() which routes through coordinator in multi-engine mode.
+	engCli := s.apiClient()
 
 	response, err := engCli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:             name,
@@ -842,7 +838,7 @@ func (s *composeService) getLinks(ctx context.Context, projectName string, servi
 
 func (s *composeService) isServiceHealthy(ctx context.Context, containers Containers, fallbackRunning bool) (bool, error) {
 	for _, c := range containers {
-		res, err := s.apiClientForList().ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
+		res, err := s.apiClient().ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
 		if err != nil {
 			return false, err
 		}
@@ -878,7 +874,7 @@ func (s *composeService) isServiceHealthy(ctx context.Context, containers Contai
 
 func (s *composeService) isServiceCompleted(ctx context.Context, containers Containers) (bool, int, error) {
 	for _, c := range containers {
-		res, err := s.apiClientForList().ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
+		res, err := s.apiClient().ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
 		if err != nil {
 			return false, 0, err
 		}
@@ -927,7 +923,7 @@ func (s *composeService) startService(ctx context.Context,
 
 		eventName := getContainerProgressName(ctr)
 		s.events.On(newEvent(eventName, api.Working, api.StatusStarting))
-		_, err = s.apiClientForService(service).ContainerStart(ctx, ctr.ID, client.ContainerStartOptions{})
+		_, err = s.apiClient().ContainerStart(ctx, ctr.ID, client.ContainerStartOptions{})
 		if err != nil {
 			return err
 		}

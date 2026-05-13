@@ -43,7 +43,7 @@ const (
 )
 
 func (s *composeService) getContainers(ctx context.Context, project string, oneOff oneOff, all bool, selectedServices ...string) (Containers, error) {
-	res, err := s.apiClientForList().ContainerList(ctx, client.ContainerListOptions{
+	res, err := s.apiClient().ContainerList(ctx, client.ContainerListOptions{
 		Filters: getDefaultFilters(project, oneOff, selectedServices...),
 		All:     all,
 	})

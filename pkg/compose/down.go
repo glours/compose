@@ -176,7 +176,7 @@ func (s *composeService) ensureVolumesDown(ctx context.Context, project *types.P
 }
 
 func (s *composeService) ensureImagesDown(ctx context.Context, project *types.Project, options api.DownOptions) ([]downOp, error) {
-	imagePruner := NewImagePruner(s.apiClientForList(), project)
+	imagePruner := NewImagePruner(s.apiClient(), project)
 	pruneOpts := ImagePruneOptions{
 		Mode:          ImagePruneMode(options.Images),
 		RemoveOrphans: options.RemoveOrphans,
@@ -213,7 +213,7 @@ func (s *composeService) ensureNetworksDown(ctx context.Context, project *types.
 }
 
 func (s *composeService) removeNetwork(ctx context.Context, composeNetworkName string, projectName string, name string) error {
-	res, err := s.apiClientForList().NetworkList(ctx, client.NetworkListOptions{
+	res, err := s.apiClient().NetworkList(ctx, client.NetworkListOptions{
 		Filters: projectFilter(projectName).Add("label", networkFilter(composeNetworkName)),
 	})
 	if err != nil {
@@ -233,7 +233,7 @@ func (s *composeService) removeNetwork(ctx context.Context, composeNetworkName s
 		if net.Name != name {
 			continue
 		}
-		nwInspect, err := s.apiClientForList().NetworkInspect(ctx, net.ID, client.NetworkInspectOptions{})
+		nwInspect, err := s.apiClient().NetworkInspect(ctx, net.ID, client.NetworkInspectOptions{})
 		if errdefs.IsNotFound(err) {
 			s.events.On(newEvent(eventName, api.Warning, "No resource found to remove"))
 			return nil
@@ -248,7 +248,7 @@ func (s *composeService) removeNetwork(ctx context.Context, composeNetworkName s
 			continue
 		}
 
-		if _, err := s.apiClientForList().NetworkRemove(ctx, net.ID, client.NetworkRemoveOptions{}); err != nil {
+		if _, err := s.apiClient().NetworkRemove(ctx, net.ID, client.NetworkRemoveOptions{}); err != nil {
 			if errdefs.IsNotFound(err) {
 				continue
 			}
@@ -272,7 +272,7 @@ func (s *composeService) removeNetwork(ctx context.Context, composeNetworkName s
 func (s *composeService) removeImage(ctx context.Context, image string) error {
 	id := fmt.Sprintf("Image %s", image)
 	return s.removeResource(id, func() error {
-		_, err := s.apiClientForList().ImageRemove(ctx, image, client.ImageRemoveOptions{})
+		_, err := s.apiClient().ImageRemove(ctx, image, client.ImageRemoveOptions{})
 		return err
 	})
 }
@@ -280,14 +280,14 @@ func (s *composeService) removeImage(ctx context.Context, image string) error {
 func (s *composeService) removeVolume(ctx context.Context, id string) error {
 	resource := fmt.Sprintf("Volume %s", id)
 
-	_, err := s.apiClientForList().VolumeInspect(ctx, id, client.VolumeInspectOptions{})
+	_, err := s.apiClient().VolumeInspect(ctx, id, client.VolumeInspectOptions{})
 	if errdefs.IsNotFound(err) {
 		// Already gone
 		return nil
 	}
 
 	return s.removeResource(resource, func() error {
-		_, err := s.apiClientForList().VolumeRemove(ctx, id, client.VolumeRemoveOptions{
+		_, err := s.apiClient().VolumeRemove(ctx, id, client.VolumeRemoveOptions{
 			Force: true,
 		})
 		return err
@@ -331,7 +331,7 @@ func (s *composeService) stopContainer(ctx context.Context, service *types.Servi
 		}
 	}
 
-	_, err := s.apiClientForList().ContainerStop(ctx, ctr.ID, client.ContainerStopOptions{
+	_, err := s.apiClient().ContainerStop(ctx, ctr.ID, client.ContainerStopOptions{
 		Timeout: utils.DurationSecondToInt(timeout),
 	})
 	if err != nil {
@@ -373,7 +373,7 @@ func (s *composeService) stopAndRemoveContainer(ctx context.Context, ctr contain
 		return err
 	}
 	s.events.On(removingEvent(eventName))
-	_, err = s.apiClientForList().ContainerRemove(ctx, ctr.ID, client.ContainerRemoveOptions{
+	_, err = s.apiClient().ContainerRemove(ctx, ctr.ID, client.ContainerRemoveOptions{
 		Force:         true,
 		RemoveVolumes: volumes,
 	})

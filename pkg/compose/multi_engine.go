@@ -145,30 +145,6 @@ func (s *composeService) sendProjectConfig(ctx context.Context, project *types.P
 	return nil
 }
 
-// apiClientForService returns the Docker API client to use when creating or
-// starting a container for the given service.
-//
-// In multi-engine mode, ALL container operations go through the coordinator.
-// The coordinator routes annotated services to their target engine and
-// non-annotated services to the default engine (local Docker Desktop).
-// This ensures the correct API version is used for each engine.
-func (s *composeService) apiClientForService(_ types.ServiceConfig) client.APIClient {
-	if s.coordClient != nil {
-		return s.coordClient
-	}
-	return s.apiClient()
-}
-
-// apiClientForList returns the Docker API client to use for listing/inspecting
-// containers. In multi-engine mode this is the coordinator client so that all
-// engines are queried and the ENGINE label is injected into the results.
-func (s *composeService) apiClientForList() client.APIClient {
-	if s.coordClient != nil {
-		return s.coordClient
-	}
-	return s.apiClient()
-}
-
 // knownOffloadContextNames are the context names that Docker Offload / Docker Cloud
 // creates. Tried in order when x-engine: offload is declared but no exact
 // context match is found.

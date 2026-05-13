@@ -68,10 +68,8 @@ func (s *composeService) Create(ctx context.Context, project *types.Project, cre
 
 func (s *composeService) create(ctx context.Context, project *types.Project, options api.CreateOptions) error {
 	// For multi-engine projects, initialise the coordinator client once here.
-	// Container creation per service then uses apiClientForService() which
-	// routes only x-engine-annotated services through the coordinator.
-	// Provider services and all image/network/volume operations continue to
-	// use the standard Docker client.
+	// apiClient() will then return coordClient for all subsequent operations,
+	// routing everything through the coordinator automatically.
 	if err := s.initCoordClient(ctx, project); err != nil {
 		return err
 	}
@@ -204,7 +202,7 @@ func (s *composeService) getCreateConfigs(ctx context.Context,
 		stdinOpen = service.StdinOpen
 	)
 
-	proxyConfig := types.MappingWithEquals(s.configFile().ParseProxyConfig(s.apiClient().DaemonHost(), nil))
+	proxyConfig := types.MappingWithEquals(s.configFile().ParseProxyConfig(s.dockerCli.Client().DaemonHost(), nil))
 	env := proxyConfig.OverrideBy(service.Environment)
 
 	var mainNwName string
