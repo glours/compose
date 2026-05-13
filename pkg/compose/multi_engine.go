@@ -181,5 +181,6 @@ func contextEndpoint(dockerCli command.Cli, contextName string) string {
 func newCoordClient(coordAddr string) (client.APIClient, error) {
 	return client.New(
 		client.WithHost(coordAddr),
+		client.WithAPIVersionNegotiation(),
 	)
 }
