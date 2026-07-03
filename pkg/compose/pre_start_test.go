@@ -18,8 +18,10 @@ package compose
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -245,6 +247,109 @@ func TestPreStart_VolumesFromServiceContainer(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, gotVolumesFrom, []string{"service-ctr-id"})
 	assert.Assert(t, gotAutoRemove)
+}
+
+func TestPreStart_InheritsServiceLoggingConfig(t *testing.T) {
+	tested, apiClient := newPreStartTestService(t)
+
+	project := &types.Project{Name: "demo"}
+	service := types.ServiceConfig{
+		Name:  "web",
+		Image: "alpine",
+		Logging: &types.LoggingConfig{
+			Driver:  "fluentd",
+			Options: map[string]string{"tag": "web-hooks"},
+		},
+		PreStart: []types.ServiceHook{
+			{Image: "alpine", Command: types.ShellCommand{"true"}},
+		},
+	}
+	ctr := container.Summary{ID: "service-ctr-id"}
+
+	var gotLogConfig container.LogConfig
+	apiClient.EXPECT().ContainerCreate(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ any, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+			gotLogConfig = opts.HostConfig.LogConfig
+			return client.ContainerCreateResult{ID: "hook-1"}, nil
+		})
+	apiClient.EXPECT().ContainerStart(gomock.Any(), "hook-1", gomock.Any()).
+		Return(client.ContainerStartResult{}, nil)
+	apiClient.EXPECT().ContainerLogs(gomock.Any(), "hook-1", gomock.Any()).
+		Return(emptyLogs(), nil)
+	apiClient.EXPECT().ContainerWait(gomock.Any(), "hook-1", gomock.Any()).
+		Return(waitResultExit(0))
+
+	err := tested.runPreStart(t.Context(), project, service, ctr, func(api.ContainerEvent) {})
+	assert.NilError(t, err)
+	assert.Equal(t, gotLogConfig.Type, "fluentd")
+	assert.DeepEqual(t, gotLogConfig.Config, map[string]string{"tag": "web-hooks"})
+}
+
+func TestPreStart_NoLoggingConfigLeavesDaemonDefault(t *testing.T) {
+	tested, apiClient := newPreStartTestService(t)
+
+	project := &types.Project{Name: "demo"}
+	service := types.ServiceConfig{
+		Name:  "web",
+		Image: "alpine",
+		PreStart: []types.ServiceHook{
+			{Image: "alpine", Command: types.ShellCommand{"true"}},
+		},
+	}
+	ctr := container.Summary{ID: "service-ctr-id"}
+
+	var gotLogConfig container.LogConfig
+	apiClient.EXPECT().ContainerCreate(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ any, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+			gotLogConfig = opts.HostConfig.LogConfig
+			return client.ContainerCreateResult{ID: "hook-1"}, nil
+		})
+	apiClient.EXPECT().ContainerStart(gomock.Any(), "hook-1", gomock.Any()).
+		Return(client.ContainerStartResult{}, nil)
+	apiClient.EXPECT().ContainerLogs(gomock.Any(), "hook-1", gomock.Any()).
+		Return(emptyLogs(), nil)
+	apiClient.EXPECT().ContainerWait(gomock.Any(), "hook-1", gomock.Any()).
+		Return(waitResultExit(0))
+
+	err := tested.runPreStart(t.Context(), project, service, ctr, func(api.ContainerEvent) {})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, gotLogConfig, container.LogConfig{})
+}
+
+func TestPreStart_LogAttachFailureDoesNotGateHook(t *testing.T) {
+	tested, apiClient := newPreStartTestService(t)
+
+	project := &types.Project{Name: "demo"}
+	service := types.ServiceConfig{
+		Name:  "web",
+		Image: "alpine",
+		PreStart: []types.ServiceHook{
+			{Image: "alpine", Command: types.ShellCommand{"true"}},
+		},
+	}
+	ctr := container.Summary{ID: "service-ctr-id"}
+
+	apiClient.EXPECT().ContainerCreate(gomock.Any(), gomock.Any()).
+		Return(client.ContainerCreateResult{ID: "hook-1"}, nil)
+	apiClient.EXPECT().ContainerStart(gomock.Any(), "hook-1", gomock.Any()).
+		Return(client.ContainerStartResult{}, nil)
+	apiClient.EXPECT().ContainerLogs(gomock.Any(), "hook-1", gomock.Any()).
+		Return(nil, errors.New("configured logging driver does not support reading"))
+	apiClient.EXPECT().ContainerWait(gomock.Any(), "hook-1", gomock.Any()).
+		Return(waitResultExit(0))
+
+	var lines []string
+	err := tested.runPreStart(t.Context(), project, service, ctr, func(event api.ContainerEvent) {
+		lines = append(lines, event.Line)
+	})
+	assert.NilError(t, err)
+	warned := false
+	for _, line := range lines {
+		if strings.Contains(line, "could not attach pre_start log stream") {
+			warned = true
+		}
+	}
+	assert.Assert(t, warned, "expected a warning about the failed log attach, got %v", lines)
 }
 
 func TestPreStart_ContainerCreateFailurePropagates(t *testing.T) {

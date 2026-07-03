@@ -146,10 +146,18 @@ func (s *composeService) createPreStartContainer(
 			api.VersionLabel: api.ComposeVersion,
 		},
 	}
+	var logConfig container.LogConfig
+	if service.Logging != nil {
+		logConfig = container.LogConfig{
+			Type:   service.Logging.Driver,
+			Config: service.Logging.Options,
+		}
+	}
 	hostCfg := &container.HostConfig{
 		AutoRemove:  true,
 		Privileged:  hook.Privileged,
 		VolumesFrom: []string{ctr.ID},
+		LogConfig:   logConfig,
 	}
 
 	apiVersion, err := s.RuntimeAPIVersion(ctx)
