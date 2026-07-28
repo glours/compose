@@ -18,6 +18,7 @@ package oci
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -93,6 +94,27 @@ func Get(ctx context.Context, resolver remotes.Resolver, ref reference.Named) (s
 		return spec.Descriptor{}, nil, err
 	}
 	return descriptor, content, nil
+}
+
+// GetBlob retrieves the content of a blob descriptor (e.g. an artifact layer)
+// from the repository ref belongs to. Unlike Get it doesn't Resolve the
+// digest, as the registry manifests endpoint only serves actual manifests;
+// blob content must be fetched directly from the blobs endpoint.
+func GetBlob(ctx context.Context, resolver remotes.Resolver, ref reference.Named, descriptor spec.Descriptor) ([]byte, error) {
+	fetcher, err := resolver.Fetcher(ctx, ref.String())
+	if err != nil {
+		return nil, fmt.Errorf("creating fetcher for %s: %w", ref, err)
+	}
+	fetch, err := fetcher.Fetch(ctx, descriptor)
+	if err != nil {
+		return nil, fmt.Errorf("fetching blob %s: %w", descriptor.Digest, err)
+	}
+	defer func() { _ = fetch.Close() }()
+	content, err := io.ReadAll(fetch)
+	if err != nil {
+		return nil, fmt.Errorf("reading blob %s: %w", descriptor.Digest, err)
+	}
+	return content, nil
 }
 
 func Copy(ctx context.Context, resolver remotes.Resolver, image reference.Named, named reference.Named) (spec.Descriptor, error) {
