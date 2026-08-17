@@ -165,46 +165,86 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    name: e2e (${{ matrix.mode }}, ${{ matrix.channel }}, ${{ matrix.store }})
+    name: e2e (${{ matrix.mode }}, ${{ matrix.channel }}, ${{ matrix.store }}, shard ${{ matrix.shard }}/2)
     strategy:
       fail-fast: false
       matrix:
         include:
           # current stable, both image store backends: several digest-identity
           # bugs only manifest on one of them (graphdriver vs containerd)
+          # Each cell is split into 2 shards to reduce wall-clock time:
+          #   shard 1 – fast tests (excludes the known-heavy files)
+          #   shard 2 – heavy tests (watch_test.go + expensive build tests)
           - mode: plugin
             engine: 29
             channel: stable
             store: graphdriver
+            shard: 1
+          - mode: plugin
+            engine: 29
+            channel: stable
+            store: graphdriver
+            shard: 2
           - mode: plugin
             engine: 29
             channel: stable
             store: containerd
+            shard: 1
+          - mode: plugin
+            engine: 29
+            channel: stable
+            store: containerd
+            shard: 2
           - mode: standalone
             engine: 29
             channel: stable
             store: graphdriver
+            shard: 1
+          - mode: standalone
+            engine: 29
+            channel: stable
+            store: graphdriver
+            shard: 2
           - mode: standalone
             engine: 29
             channel: stable
             store: containerd
+            shard: 1
+          - mode: standalone
+            engine: 29
+            channel: stable
+            store: containerd
+            shard: 2
 
           # old stable (latest major - 1)
           - mode: plugin
             engine: 28
             channel: oldstable
             store: graphdriver
+            shard: 1
+          - mode: plugin
+            engine: 28
+            channel: oldstable
+            store: graphdriver
+            shard: 2
           - mode: standalone
             engine: 28
             channel: oldstable
             store: graphdriver
+            shard: 1
+          - mode: standalone
+            engine: 28
+            channel: oldstable
+            store: graphdriver
+            shard: 2
     steps:
       - name: Prepare
         run: |
           mode=${{ matrix.mode }}
           engine=${{ matrix.engine }}
           store=${{ matrix.store }}
-          echo "MODE_ENGINE_PAIR=${mode}-${engine}-${store}" >> $GITHUB_ENV
+          shard=${{ matrix.shard }}
+          echo "MODE_ENGINE_PAIR=${mode}-${engine}-${store}-shard${shard}" >> $GITHUB_ENV
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -264,6 +304,30 @@ jobs:
         env:
           BUILD_TAGS: e2e
 
+      - name: Restore e2e image cache
+        id: image-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: /tmp/e2e-images.tar
+          # Key encodes the engine version + the image list so any change
+          # to .github/e2e-images.txt invalidates the cache automatically.
+          key: e2e-images-v1-docker${{ matrix.engine }}-${{ hashFiles('.github/e2e-images.txt') }}
+
+      - name: Load cached e2e images
+        if: steps.image-cache.outputs.cache-hit == 'true'
+        run: docker load --input /tmp/e2e-images.tar
+
+      - name: Pull and cache e2e images
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        run: |
+          # Pull all passive images in parallel (4 at a time).
+          # alpine:* and pull-policy test images are intentionally absent from
+          # .github/e2e-images.txt so they are never pre-pulled.
+          grep -v '^#' .github/e2e-images.txt | xargs -P 4 docker pull
+          # Pack them into a single archive for the GHA cache.
+          docker save $(cat .github/e2e-images.txt | grep -v '^#' | tr '\n' ' ') \
+            -o /tmp/e2e-images.tar
+
       - name: Setup tmate session
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debug_enabled }}
         uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
@@ -271,12 +335,25 @@ jobs:
           limit-access-to-actor: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set e2e shard filter
+        run: |
+          # Tests isolated to shard 2 (the I/O-heavy outliers).
+          # Shard 1 receives everything else via EXCLUDE_E2E_TESTS.
+          # Update this list whenever a new long-running test is added to
+          # watch_test.go or to the expensive build-platform/TLS tests.
+          HEAVY="TestWatch|TestWatchExec|TestWatchMultiServices|TestWatchRebuildIgnoresDependencies|TestWatchIncludes|TestRebuildOnDotEnvWithExternalNetwork|TestCheckWarningXInitialSyn|TestLocalComposeBuild|TestBuildPlatformsWithCorrectBuildxConfig|TestBuildTLS|TestBuildPrivileged|TestBuildEntitlements"
+          echo "E2E_HEAVY_TESTS=${HEAVY}" >> $GITHUB_ENV
+
       - name: Test plugin mode
         if: ${{ matrix.mode == 'plugin' }}
         run: |
           rm -rf ./bin/coverage/e2e
           mkdir -p ./bin/coverage/e2e
-          make e2e-compose GOCOVERDIR=bin/coverage/e2e TEST_FLAGS="-v"
+          if [ "${{ matrix.shard }}" = "1" ]; then
+            make e2e-compose GOCOVERDIR=bin/coverage/e2e TEST_FLAGS="-v" EXCLUDE_E2E_TESTS="${E2E_HEAVY_TESTS}"
+          else
+            make e2e-compose GOCOVERDIR=bin/coverage/e2e TEST_FLAGS="-v" E2E_TEST="^(${E2E_HEAVY_TESTS})$"
+          fi
 
       - name: Gather coverage data
         if: ${{ matrix.mode == 'plugin' }}
@@ -291,7 +368,11 @@ jobs:
         run: |
           rm -f /usr/local/bin/docker-compose
           cp bin/build/docker-compose /usr/local/bin
-          make e2e-compose-standalone
+          if [ "${{ matrix.shard }}" = "1" ]; then
+            make e2e-compose-standalone EXCLUDE_E2E_TESTS="${E2E_HEAVY_TESTS}"
+          else
+            make e2e-compose-standalone E2E_TEST="^(${E2E_HEAVY_TESTS})$"
+          fi
 
       - name: e2e Test Summary
         uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
