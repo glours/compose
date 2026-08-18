@@ -323,7 +323,7 @@ jobs:
           # Pull all passive images in parallel (4 at a time).
           # alpine:* and pull-policy test images are intentionally absent from
           # .github/e2e-images.txt so they are never pre-pulled.
-          grep -v '^#' .github/e2e-images.txt | xargs -P 4 docker pull
+          grep -v '^#' .github/e2e-images.txt | xargs -P 4 -n 1 docker pull
           # Pack them into a single archive for the GHA cache.
           docker save $(cat .github/e2e-images.txt | grep -v '^#' | tr '\n' ' ') \
             -o /tmp/e2e-images.tar
